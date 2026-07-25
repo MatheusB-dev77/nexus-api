@@ -1,0 +1,133 @@
+﻿name: Nexus API CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+
+  sast:
+    name: "Fase 1 - SAST (Analise de Seguranca)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Auditoria de seguranca das dependencias
+        run: npm audit --audit-level=high
+
+  build:
+    name: "Fase 1 - Build (Estrutura do projeto)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Validar se a aplicacao sobe sem erros de sintaxe/import
+        run: |
+          node -e "require('./src/app.js'); console.log('Build OK - app.js carregado com sucesso')"
+
+  test:
+    name: "Fase 2 - Testes Unitarios"
+    runs-on: ubuntu-latest
+    needs: [sast, build]
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Rodar testes unitarios (Jest)
+        run: npm test
+
+  lint-quality:
+    name: "Fase 2 - Lint (Qualidade de Codigo)"
+    runs-on: ubuntu-latest
+    needs: [sast, build]
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Rodar ESLint
+        run: npm run lint
+
+  api-tests:
+    name: "Fase 3 - Testes E2E (API)"
+    runs-on: ubuntu-latest
+    needs: [test, lint-quality]
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Subir a API em background
+        run: nohup node index.js > server.log 2>&1 &
+
+      - name: Aguardar a API iniciar
+        run: sleep 3
+
+      - name: "Smoke Test - Health check"
+        run: |
+          curl -s -f http://localhost:3000/api/health || (cat server.log && exit 1)
+
+      - name: "Smoke Test - Listar produtos"
+        run: |
+          curl -s -f http://localhost:3000/api/products || (cat server.log && exit 1)
+
+      - name: "Regression Test - Fluxo de registro e login"
+        run: |
+          curl -s -f -X POST http://localhost:3000/api/register \
+            -H "Content-Type: application/json" \
+            -d '{"name":"CI Test","email":"ci@nexus.com","password":"123456"}'
+          curl -s -f -X POST http://localhost:3000/api/login \
+            -H "Content-Type: application/json" \
+            -d '{"email":"ci@nexus.com","password":"123456"}'
+
+      - name: "Regression Test - Checkout"
+        run: |
+          curl -s -f -X POST http://localhost:3000/api/checkout \
+            -H "Content-Type: application/json" \
+            -d '{"cart":[{"id":1,"qty":1}],"method":"pix"}'
+
+      - name: Exibir logs do servidor (se algo falhar)
+        if: failure()
+        run: cat server.log
